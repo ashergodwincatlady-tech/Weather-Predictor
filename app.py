@@ -5,9 +5,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
-from scikit_learn.ensemble import RandomForestClassifier, RandomForestRegressor
-from scikit_learn.impute import SimpleImputer
-from scikit_learn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
 
 # ============================================================
 # SETTINGS
