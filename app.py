@@ -77,6 +77,9 @@ def load_weather():
 
     data = pd.read_csv(CSV_FILE)
 
+    # Remove accidental spaces/BOM from column names FIRST.
+    data.columns = data.columns.astype(str).str.replace("\\ufeff", "", regex=False).str.strip()
+
     # Separate real historical observations from saved predictions.
     # Only "actual" rows are used to train the machine-learning model.
     if "record_type" not in data.columns:
@@ -89,11 +92,6 @@ def load_weather():
         .str.strip()
         .str.lower()
     )
-
-    training_data = data[data["record_type"] == "actual"].copy()
-
-    # Remove accidental spaces/BOM from column names.
-    data.columns = data.columns.astype(str).str.replace("\\ufeff", "", regex=False).str.strip()
 
     # These are the ONLY columns that must exist in the CSV.
     required_columns = {
@@ -142,7 +140,11 @@ def load_weather():
 
     data["weather_condition"] = data["weather_condition"].replace("", "unknown")
 
-    # Only real historical observations are used for training.
+    # Filter to real historical observations AFTER date conversion.
+    # This prevents the pandas .dt error because data["date"] is already
+    # a proper datetime column at this point.
+    training_data = data[data["record_type"] == "actual"].copy()
+
     data = (
         training_data.dropna(subset=["date"])
         .sort_values("date")
