@@ -1,5 +1,5 @@
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -77,6 +77,21 @@ def load_weather():
 
     data = pd.read_csv(CSV_FILE)
 
+    # Separate real historical observations from saved predictions.
+    # Only "actual" rows are used to train the machine-learning model.
+    if "record_type" not in data.columns:
+        data["record_type"] = "actual"
+
+    data["record_type"] = (
+        data["record_type"]
+        .fillna("actual")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+    )
+
+    training_data = data[data["record_type"] == "actual"].copy()
+
     # Remove accidental spaces/BOM from column names.
     data.columns = data.columns.astype(str).str.replace("\\ufeff", "", regex=False).str.strip()
 
@@ -127,8 +142,9 @@ def load_weather():
 
     data["weather_condition"] = data["weather_condition"].replace("", "unknown")
 
+    # Only real historical observations are used for training.
     data = (
-        data.dropna(subset=["date"])
+        training_data.dropna(subset=["date"])
         .sort_values("date")
         .drop_duplicates(subset=["date"])
         .reset_index(drop=True)
@@ -414,6 +430,76 @@ def get_topic(question):
 
 
 # ============================================================
+# SAVE FORECASTS TO CSV
+# ============================================================
+
+def save_forecast_to_csv(forecast_rows):
+    """
+    Save the newest five-day predictions into the same CSV.
+
+    Real historical rows are marked as "actual".
+    Model-generated rows are marked as "prediction".
+    Old predictions are removed before new predictions are saved.
+    """
+
+    full_data = pd.read_csv(CSV_FILE)
+
+    # Make sure the CSV has a record_type column.
+    if "record_type" not in full_data.columns:
+        full_data["record_type"] = "actual"
+
+    full_data["record_type"] = (
+        full_data["record_type"]
+        .fillna("actual")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+    )
+
+    # Remove old predictions so the CSV always contains
+    # the newest five-day forecast.
+    full_data = full_data[
+        full_data["record_type"] != "prediction"
+    ].copy()
+
+    predictions = pd.DataFrame(forecast_rows)
+
+    # Convert the forecast table names to CSV column names.
+    predictions = predictions.rename(
+        columns={
+            "Date": "date",
+            "Max °C": "temperature_max_c",
+            "Min °C": "temperature_min_c",
+            "Humidity %": "humidity_percent",
+            "Rain mm": "precipitation_mm",
+            "Wind km/h": "wind_speed_kmh",
+            "Weather": "weather_condition",
+        }
+    )
+
+    # Rain chance is not one of the original weather columns,
+    # but keeping it is useful if the CSV already has that column.
+    predictions["record_type"] = "prediction"
+
+    # Make sure every existing CSV column is present.
+    csv_columns = list(full_data.columns)
+
+    for column in csv_columns:
+        if column not in predictions.columns:
+            predictions[column] = np.nan
+
+    predictions = predictions[csv_columns]
+
+    # Add the new predictions after the historical observations.
+    combined = pd.concat(
+        [full_data, predictions],
+        ignore_index=True,
+    )
+
+    combined.to_csv(CSV_FILE, index=False)
+
+
+# ============================================================
 # ANSWER QUESTIONS
 # ============================================================
 
@@ -434,8 +520,9 @@ def answer_question(question, data):
             "precipitation, wind, or weather condition."
         )
 
-    last_date = data["date"].iloc[-1]
-    forecast_date = last_date + timedelta(days=days)
+    # Forecast dates are based on today's real date, not the last CSV date.
+    today = pd.Timestamp(datetime.now().date())
+    forecast_date = today + timedelta(days=days)
     date_text = forecast_date.strftime("%B %d, %Y")
 
     if topic == "temperature_max":
@@ -502,7 +589,7 @@ st.write(
 )
 st.caption(
     "The model reads Claes.love.csv automatically. You do not need to enter "
-    "today's weather. Forecasts are relative to the last date in the CSV."
+    "today's weather. The forecast dates are based on today's date."
 )
 
 # Load data.
@@ -512,15 +599,14 @@ except Exception as error:
     st.error(f"CSV error: {error}")
     st.stop()
 
-# Show exactly which file is being read.
-with st.expander("CSV file details"):
-    st.write(f"Reading file: `{CSV_FILE}`")
-    st.write("Columns found:")
-    st.code("\n".join(weather.columns.tolist()))
-    st.write(f"Rows: {len(weather)}")
+today = pd.Timestamp(datetime.now().date())
+tomorrow = today + timedelta(days=1)
 
-last_date = weather["date"].iloc[-1]
-st.info(f"Latest date in the CSV: **{last_date.strftime('%B %d, %Y')}**")
+st.info(
+    f"Today is **{today.strftime('%B %d, %Y')}**. "
+    f"The 5-day forecast starts tomorrow, "
+    f"**{tomorrow.strftime('%B %d, %Y')}**."
+)
 
 # Train/cache all models once when the app starts.
 try:
@@ -556,7 +642,7 @@ try:
     for days in range(1, MAX_FORECAST_DAYS + 1):
         forecast_rows.append(
             {
-                "Date": last_date + timedelta(days=days),
+                "Date": today + timedelta(days=days),
                 "Max °C": predict_numeric(
                     weather, "temperature_max_c", days
                 ),
@@ -578,6 +664,10 @@ try:
         )
 
     forecast_table = pd.DataFrame(forecast_rows)
+
+    # Save the newest five-day predictions into Claes.love.csv.
+    save_forecast_to_csv(forecast_rows)
+
     forecast_table["Date"] = forecast_table["Date"].dt.strftime("%Y-%m-%d")
     st.dataframe(
         forecast_table.round(1),
@@ -586,10 +676,6 @@ try:
     )
 except Exception as error:
     st.error(f"The 5-day forecast could not be generated: {error}")
-
-# Historical data.
-with st.expander("View the historical CSV"):
-    st.dataframe(weather, hide_index=True, use_container_width=True)
 
 # Explanation.
 with st.expander("How the machine-learning model works"):
